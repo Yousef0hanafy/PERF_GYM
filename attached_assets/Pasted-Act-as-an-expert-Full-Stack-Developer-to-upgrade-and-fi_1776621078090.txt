@@ -1,0 +1,29 @@
+Act as an expert Full-Stack Developer to upgrade and fix the "Performance Gym" project. Follow these tasks strictly to ensure security, functionality, and professional UX.
+
+### Task 1: Database Schema & Dashboard Logic
+- Update the Supabase `members` table to include a `date_of_birth` column.
+- **Dashboard Overhaul:** - Remove "Total Trainees", "Monthly Revenue", and all percentage indicators.
+  - Add "Today's Birthdays" card: Display members whose birthday matches today's date.
+  - Add "Expiring Soon" card: Show count of subscriptions ending within 7 days.
+- Ensure all Supabase fetch queries are optimized for these new cards.
+
+### Task 2: Admin Security & Access Control
+- **Hidden Route:** Remove all "Admin Panel" buttons from the public UI. The only way to access it is via the `/admin` URL.
+- **Fixed Password Protection:** Create a simple login overlay for the `/admin` route. Use a fixed password stored in an environment variable (`VITE_ADMIN_PASSWORD`).
+- **Persistence:** Store a session flag in `localStorage` so the admin stays logged in until the tab is closed.
+
+### Task 3: Bug Fixes (Supabase & Media)
+- **Add Member Fix:** Debug the "Add Member" form. Ensure the data is correctly sent to Supabase and handle any RLS (Row Level Security) issues.
+- **Transformations & Gallery Fix:** - Fix the image rendering issue. Ensure that the image URLs saved in Supabase are correctly bound to the `src` attributes in the UI.
+  - Implement a "Loading State" (Spinner or Skeleton) while images or data are being fetched from Supabase.
+- **Portal Authorization:** Secure the user portal so it cannot be accessed without a proper "Check-in" or valid credentials.
+
+### Task 4: UI/UX Refactoring
+- **Contact Info:** Remove the "Contact Us" section from the main landing page.
+- **Global Footer:** Move all contact details (Social Media icons, Phone, Address, and an embedded Map) into the Footer component.
+- **Responsiveness:** Ensure the Admin Tables are responsive using `overflow-x-auto` for mobile views.
+- **User Feedback:** Implement `react-hot-toast` or a similar notification system to show "Success" or "Error" messages when adding/editing members or images.
+
+### Task 5: Performance & Optimization
+- Implement image aspect-ratio cropping or containment (e.g., `object-cover`) in the Gallery and Transformations sections to prevent UI breaking with different image sizes.
+- Double-check that all state updates in React reflect immediately in the UI after a Supabase change (Optimistic UI updates).
