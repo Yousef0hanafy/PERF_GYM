@@ -17,7 +17,7 @@ export function HeroSection() {
       {/* Background Image */}
       <div className="absolute inset-0">
         <img
-          src="https://soayokjfafifhmhjuavf.supabase.co/storage/v1/object/sign/Gallary/Hero_Second.png?token=eyJraWQiOiJzdG9yYWdlLXVybC1zaWduaW5nLWtleV8wYzMwNWVlYi03NzViLTQ4ZWMtYjczNS1iYTU0YTJhNTJlNDkiLCJhbGciOiJIUzI1NiJ9.eyJ1cmwiOiJHYWxsYXJ5L0hlcm9fU2Vjb25kLnBuZyIsImlhdCI6MTc3Nzc3MTQ2OCwiZXhwIjoxOTM1NDUxNDY4fQ._rUU8h27VWTDgHyGCF1rfV-yyKXvkNMyN33QU1YOB8A"
+          src="https://soayokjfafifhmhjuavf.supabase.co/storage/v1/object/sign/Gallary/Hero_Img.avif?token=eyJraWQiOiJzdG9yYWdlLXVybC1zaWduaW5nLWtleV8wYzMwNWVlYi03NzViLTQ4ZWMtYjczNS1iYTU0YTJhNTJlNDkiLCJhbGciOiJIUzI1NiJ9.eyJ1cmwiOiJHYWxsYXJ5L0hlcm9fSW1nLmF2aWYiLCJpYXQiOjE3NzkwNTQxMDAsImV4cCI6MTkzNjczNDEwMH0.Gv7U1bztxXV5TePRcIv6bzXoF1rFn64ZQW-wfAfA3so"
           alt="Performance Gym interior"
           fetchPriority="high"
           decoding="async"
