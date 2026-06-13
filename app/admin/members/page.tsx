@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { motion } from "framer-motion";
-import { Plus, Search, Users, Loader2, Edit, Snowflake, Minus, CalendarClock } from "lucide-react";
+import { Plus, Search, Users, Loader2, Edit, Snowflake, Minus, CalendarClock, ChevronDown } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -22,6 +22,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import type { Member, SupabaseMembershipPlan } from "@/types";
 
+const PAGE_SIZE = 20;
+
 const emptyForm = {
   name: "", phone: "", email: "", plan_id: "",
   start_date: "", end_date: "", date_of_birth: "",
@@ -33,27 +35,109 @@ export default function MembersPage() {
   const [members, setMembers] = useState<Member[]>([]);
   const [plans, setPlans] = useState<SupabaseMembershipPlan[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [editingMember, setEditingMember] = useState<Member | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [searchInput, setSearchInput] = useState("");
+  const [hasMore, setHasMore] = useState(true);
+  const [totalCount, setTotalCount] = useState(0);
+  const [activeCount, setActiveCount] = useState(0);
+  const [frozenCount, setFrozenCount] = useState(0);
+  const [searchResultCount, setSearchResultCount] = useState<number | null>(null);
   const [formData, setFormData] = useState(emptyForm);
+
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const supabase = createClient();
 
+  // Fetch stats counts (lightweight, no full data fetch)
+  const fetchCounts = useCallback(async () => {
+    const now = new Date().toISOString().split("T")[0];
+    const [{ count: total }, { count: active }, { count: frozen }] = await Promise.all([
+      supabase.from("members").select("*", { count: "exact", head: true }),
+      supabase.from("members").select("*", { count: "exact", head: true }).eq("is_frozen", false).gt("end_date", now),
+      supabase.from("members").select("*", { count: "exact", head: true }).eq("is_frozen", true),
+    ]);
+    setTotalCount(total || 0);
+    setActiveCount(active || 0);
+    setFrozenCount(frozen || 0);
+  }, [supabase]);
+
+  // Fetch members with server-side pagination & search
+  const fetchMembers = useCallback(async (offset = 0, append = false) => {
+    const isLoadingMore = offset > 0;
+    if (isLoadingMore) setLoadingMore(true);
+    else setLoading(true);
+
+    let query = supabase
+      .from("members")
+      .select("*", { count: "exact" })
+      .order("created_at", { ascending: false })
+      .range(offset, offset + PAGE_SIZE - 1);
+
+    if (searchQuery.trim()) {
+      const q = searchQuery.trim();
+      query = query.or(
+        `name.ilike.%${q}%,email.ilike.%${q}%,phone.ilike.%${q}%,member_id.ilike.%${q}%`
+      );
+    }
+
+    const { data, error, count } = await query;
+
+    if (error) {
+      toast.error("Failed to load members");
+    } else {
+      const newMembers = data || [];
+      setMembers((prev) => (append ? [...prev, ...newMembers] : newMembers));
+      setHasMore((offset + PAGE_SIZE) < (count || 0));
+      setSearchResultCount(searchQuery.trim() ? count || 0 : null);
+    }
+
+    if (isLoadingMore) setLoadingMore(false);
+    else setLoading(false);
+  }, [supabase, searchQuery]);
+
+  const fetchPlans = async () => {
+    const { data } = await supabase.from("membership_plans").select("*").order("price", { ascending: true });
+    if (data) setPlans(data);
+  };
+
+  // Initial load
   useEffect(() => {
-    const fetchAll = async () => {
-      const [{ data: mData, error }, { data: pData }] = await Promise.all([
-        supabase.from("members").select("*").order("created_at", { ascending: false }),
-        supabase.from("membership_plans").select("*").order("price", { ascending: true }),
-      ]);
-      if (error) toast.error("Failed to load members");
-      else setMembers(mData || []);
-      if (pData) setPlans(pData);
-      setLoading(false);
-    };
-    fetchAll();
-  }, []);
+    fetchCounts();
+    fetchMembers(0, false);
+    fetchPlans();
+  }, [fetchCounts, fetchMembers]);
+
+  // Infinite scroll via IntersectionObserver
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && hasMore && !loading && !loadingMore) {
+          fetchMembers(members.length, true);
+        }
+      },
+      { rootMargin: "200px" }
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [hasMore, loading, loadingMore, members.length, fetchMembers]);
+
+  // Debounced search
+  const handleSearchChange = (value: string) => {
+    setSearchInput(value);
+    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    searchTimeoutRef.current = setTimeout(() => setSearchQuery(value), 400);
+  };
+
+  const loadMore = () => {
+    if (hasMore && !loadingMore && !loading) fetchMembers(members.length, true);
+  };
 
   const handlePlanChange = (planId: string) => {
     const selected = plans.find((p) => p.id === planId);
@@ -99,6 +183,7 @@ export default function MembersPage() {
       toast.success(`${data.name} added successfully`);
       setFormData(emptyForm);
       setIsAddDialogOpen(false);
+      fetchCounts();
     }
     setSubmitting(false);
   };
@@ -170,6 +255,7 @@ export default function MembersPage() {
     else {
       setMembers((prev) => prev.map((m) => m.id === member.id ? data : m));
       toast.success(data.is_frozen ? `${member.name}'s membership frozen` : `${member.name}'s membership unfrozen`);
+      fetchCounts();
     }
   };
 
@@ -195,6 +281,7 @@ export default function MembersPage() {
     else {
       setMembers((prev) => prev.map((m) => m.id === member.id ? data : m));
       toast.success(`${member.name}'s membership renewed until ${newEnd.toLocaleDateString()}`);
+      fetchCounts();
     }
   };
 
@@ -203,15 +290,6 @@ export default function MembersPage() {
 
   const getPlanName = (planId: string | null) =>
     planId ? (plans.find((p) => p.id === planId)?.name || "Unknown") : "—";
-
-  const filteredMembers = members.filter((m) =>
-    m.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    (m.email?.toLowerCase() || "").includes(searchQuery.toLowerCase()) ||
-    m.phone.includes(searchQuery) ||
-    m.member_id.toLowerCase().includes(searchQuery.toLowerCase())
-  );
-
-  const activeCount = members.filter((m) => getDaysRemaining(m.end_date) > 0 && !m.is_frozen).length;
 
   const sessionField = (
     label: string,
@@ -291,9 +369,9 @@ export default function MembersPage() {
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         {[
-          { label: "Total Members", value: members.length },
+          { label: "Total Members", value: totalCount },
           { label: "Active Members", value: activeCount },
-          { label: "Frozen Members", value: members.filter((m) => m.is_frozen).length },
+          { label: "Frozen Members", value: frozenCount },
         ].map(({ label, value }) => (
           <Card key={label}>
             <CardHeader className="flex flex-row items-center justify-between pb-2">
@@ -307,115 +385,151 @@ export default function MembersPage() {
 
       <Card>
         <CardHeader>
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input placeholder="Search by name, ID, email or phone..." value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)} className="pl-10 max-w-sm" />
+          <div className="flex items-center justify-between gap-4">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input placeholder="Search by name, ID, email or phone..." value={searchInput}
+                onChange={(e) => handleSearchChange(e.target.value)} className="pl-10 max-w-sm" />
+            </div>
+            {!loading && (
+              <span className="text-sm text-muted-foreground shrink-0">
+                Showing {members.length}
+                {searchResultCount !== null ? ` of ${searchResultCount}` : ` of ${totalCount}`}
+              </span>
+            )}
           </div>
         </CardHeader>
         <CardContent>
           {loading ? (
-            <div className="space-y-3">{[1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-12 w-full rounded" />)}</div>
-          ) : filteredMembers.length > 0 ? (
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>ID</TableHead>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Phone</TableHead>
-                    <TableHead>Plan</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Days Left</TableHead>
-                    <TableHead>Benefits</TableHead>
-                    <TableHead>Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredMembers.map((member) => {
-                    const daysLeft = getDaysRemaining(member.end_date);
-                    const isActive = daysLeft > 0 && !member.is_frozen;
-                    const isExpired = daysLeft <= 0 && !member.is_frozen;
-                    return (
-                      <TableRow key={member.id}>
-                        <TableCell className="font-mono text-xs">{member.member_id}</TableCell>
-                        <TableCell className="font-medium whitespace-nowrap">{member.name}</TableCell>
-                        <TableCell className="whitespace-nowrap">{member.phone}</TableCell>
-                        <TableCell className="whitespace-nowrap">{getPlanName(member.plan_id)}</TableCell>
-                        <TableCell>
-                          <Badge variant={isActive ? "default" : member.is_frozen ? "secondary" : "destructive"}>
-                            {member.is_frozen ? "Frozen" : isActive ? "Active" : "Expired"}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          <span className={daysLeft <= 7 && daysLeft > 0 ? "text-red-500 font-medium" : ""}>
-                            {daysLeft > 0 ? `${daysLeft}d` : "Expired"}
-                          </span>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex flex-wrap gap-1 min-w-[140px]">
-                            {[
-                              { label: "Inv", value: member.invitations_left, field: "invitations_left" as const },
-                              { label: "Ori", value: member.pt_sessions_left, field: "pt_sessions_left" as const },
-                              { label: "Body", value: member.body_assessments_left, field: "body_assessments_left" as const },
-                              { label: "KB", value: member.kickboxing_sessions_left, field: "kickboxing_sessions_left" as const },
-                            ].map(({ label, value, field }) => {
-                              const canDeduct = value > 0 && !isExpired;
-                              return (
-                                <button
-                                  key={field}
-                                  onClick={() => !isExpired && handleDeductSession(member, field)}
-                                  title={isExpired ? "Member expired — renew first" : `Deduct 1 ${label} (${value} remaining)`}
-                                  disabled={isExpired}
-                                  className={`flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border transition-colors ${
-                                    canDeduct
-                                      ? "border-border hover:border-primary hover:text-primary cursor-pointer"
-                                      : "border-transparent text-muted-foreground/40 cursor-default"
-                                  }`}
-                                >
-                                  {canDeduct && <Minus className="h-2.5 w-2.5" />}
-                                  {label}: {value}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-1">
-                            <Button
-                              variant="ghost" size="icon"
-                              title={isExpired ? "Cannot edit expired member — renew first" : "Edit member"}
-                              onClick={() => !isExpired && openEdit(member)}
-                              disabled={isExpired}
-                              className={isExpired ? "opacity-30 cursor-not-allowed" : ""}
-                            >
-                              <Edit className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              variant="ghost" size="icon"
-                              title={isExpired ? "Cannot freeze expired member — renew first" : member.is_frozen ? "Unfreeze" : "Freeze"}
-                              onClick={() => !isExpired && handleToggleFreeze(member)}
-                              disabled={isExpired}
-                              className={isExpired ? "opacity-30 cursor-not-allowed" : member.is_frozen ? "text-blue-500" : "text-muted-foreground"}
-                            >
-                              <Snowflake className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              variant="ghost" size="icon"
-                              title="Renew membership"
-                              onClick={() => handleRenew(member)}
-                              className="text-green-500"
-                            >
-                              <CalendarClock className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </div>
+            <div className="space-y-3">{[1, 2, 3, 4, 5].map((i) => <Skeleton key={i} className="h-12 w-full rounded" />)}</div>
+          ) : members.length > 0 ? (
+            <>
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>ID</TableHead>
+                      <TableHead>Name</TableHead>
+                      <TableHead>Phone</TableHead>
+                      <TableHead>Plan</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Days Left</TableHead>
+                      <TableHead>Benefits</TableHead>
+                      <TableHead>Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {members.map((member) => {
+                      const daysLeft = getDaysRemaining(member.end_date);
+                      const isActive = daysLeft > 0 && !member.is_frozen;
+                      const isExpired = daysLeft <= 0 && !member.is_frozen;
+                      return (
+                        <TableRow key={member.id}>
+                          <TableCell className="font-mono text-xs">{member.member_id}</TableCell>
+                          <TableCell className="font-medium whitespace-nowrap">{member.name}</TableCell>
+                          <TableCell className="whitespace-nowrap">{member.phone}</TableCell>
+                          <TableCell className="whitespace-nowrap">{getPlanName(member.plan_id)}</TableCell>
+                          <TableCell>
+                            <Badge variant={isActive ? "default" : member.is_frozen ? "secondary" : "destructive"}>
+                              {member.is_frozen ? "Frozen" : isActive ? "Active" : "Expired"}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            <span className={daysLeft <= 7 && daysLeft > 0 ? "text-red-500 font-medium" : ""}>
+                              {daysLeft > 0 ? `${daysLeft}d` : "Expired"}
+                            </span>
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex flex-wrap gap-1 min-w-[140px]">
+                              {[
+                                { label: "Inv", value: member.invitations_left, field: "invitations_left" as const },
+                                { label: "Ori", value: member.pt_sessions_left, field: "pt_sessions_left" as const },
+                                { label: "Body", value: member.body_assessments_left, field: "body_assessments_left" as const },
+                                { label: "KB", value: member.kickboxing_sessions_left, field: "kickboxing_sessions_left" as const },
+                              ].map(({ label, value, field }) => {
+                                const canDeduct = value > 0 && !isExpired;
+                                return (
+                                  <button
+                                    key={field}
+                                    onClick={() => !isExpired && handleDeductSession(member, field)}
+                                    title={isExpired ? "Member expired — renew first" : `Deduct 1 ${label} (${value} remaining)`}
+                                    disabled={isExpired}
+                                    className={`flex items-center gap-1 text-xs px-1.5 py-0.5 rounded border transition-colors ${
+                                      canDeduct
+                                        ? "border-border hover:border-primary hover:text-primary cursor-pointer"
+                                        : "border-transparent text-muted-foreground/40 cursor-default"
+                                    }`}
+                                  >
+                                    {canDeduct && <Minus className="h-2.5 w-2.5" />}
+                                    {label}: {value}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex items-center gap-1">
+                              <Button
+                                variant="ghost" size="icon"
+                                title={isExpired ? "Cannot edit expired member — renew first" : "Edit member"}
+                                onClick={() => !isExpired && openEdit(member)}
+                                disabled={isExpired}
+                                className={isExpired ? "opacity-30 cursor-not-allowed" : ""}
+                              >
+                                <Edit className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="ghost" size="icon"
+                                title={isExpired ? "Cannot freeze expired member — renew first" : member.is_frozen ? "Unfreeze" : "Freeze"}
+                                onClick={() => !isExpired && handleToggleFreeze(member)}
+                                disabled={isExpired}
+                                className={isExpired ? "opacity-30 cursor-not-allowed" : member.is_frozen ? "text-blue-500" : "text-muted-foreground"}
+                              >
+                                <Snowflake className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="ghost" size="icon"
+                                title="Renew membership"
+                                onClick={() => handleRenew(member)}
+                                className="text-green-500"
+                              >
+                                <CalendarClock className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+
+              {/* Load More Section */}
+              <div ref={sentinelRef} className="flex flex-col items-center gap-2 pt-4">
+                {loadingMore && (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground py-2">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Loading more members...
+                  </div>
+                )}
+                {hasMore && !loadingMore && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={loadMore}
+                    className="text-muted-foreground hover:text-foreground"
+                  >
+                    <ChevronDown className="h-4 w-4 mr-1" />
+                    Load more members
+                  </Button>
+                )}
+                {!hasMore && members.length > 0 && (
+                  <p className="text-sm text-muted-foreground py-2">
+                    All members loaded
+                  </p>
+                )}
+              </div>
+            </>
           ) : (
             <div className="text-center py-12">
               <Users className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
@@ -465,6 +579,7 @@ export default function MembersPage() {
                       if (!error) {
                         setEditingMember(data);
                         setMembers((prev) => prev.map((m) => m.id === editingMember.id ? data : m));
+                        fetchCounts();
                       }
                     }}
                   />
